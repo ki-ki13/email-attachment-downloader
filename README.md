@@ -1,5 +1,3 @@
-# README
-
 ## Project: Download Email
 
 This repository contains tools and scripts for downloading and managing emails efficiently. It is designed to simplify email retrieval and processing for various use cases.
