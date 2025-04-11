@@ -1,0 +1,13 @@
+.env
+QQ
+/email_attachments
+/email_attachments2
+email_attachment.xlsx
+email_attachment2.xlsx
+email_data3.xlsx
+email_data4.xlsx
+email_attachment_report.xlsx
+/dist
+/build
+email_processor.spec
+email_config.ini
