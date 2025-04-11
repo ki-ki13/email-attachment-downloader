@@ -48,6 +48,10 @@ This repository contains tools and scripts for downloading and managing emails e
 
 ---
 
+## GUI App Screenshot
+<img src="img/exp-mail-download.png" alt="GUI APP config email">
+<img src="img/exp-mail-download2.png" alt="GUI APP process email">
+
 
 ## Contact
 
