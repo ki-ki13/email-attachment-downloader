@@ -110,17 +110,118 @@ def save_attachment(part, attachments_dir, email_date=None):
 
 def append_to_excel(new_data, output_file):
     try:
+        if len(new_data) == 0:
+            print("No email data to write to Excel")
+            return "No new emails found to add to Excel"
+            
+        if not output_file.lower().endswith('.xlsx'):
+            output_file = os.path.splitext(output_file)[0] + '.xlsx'
+            
+        output_dir = os.path.dirname(output_file)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+            
+        print(f"Writing {len(new_data)} records to {output_file}")
+        
         if os.path.exists(output_file):
-            existing_df = pd.read_excel(output_file)
-            combined_df = pd.concat([existing_df, new_data], ignore_index=True)
-            combined_df.drop_duplicates(subset=['Subject', 'Sender', 'Date'], keep='first', inplace=True)
-            combined_df.to_excel(output_file, index=False)
-            return f"Appended {len(new_data)} new emails to {output_file}"
-        else: 
-            new_data.to_excel(output_file, index=False)
-            return f"Created new file {output_file} with {len(new_data)} emails"      
+            try:
+                existing_df = pd.read_excel(output_file, sheet_name="Email Data")
+                print(f"Loaded existing Excel with {len(existing_df)} records")
+                
+                for col in new_data.columns:
+                    if col not in existing_df.columns:
+                        existing_df[col] = ''
+                
+                combined_df = pd.concat([existing_df, new_data], ignore_index=True)
+                print(f"Combined dataframe has {len(combined_df)} records")
+                
+                old_len = len(combined_df)
+                combined_df.drop_duplicates(subset=['Subject', 'Sender', 'Date'], keep='first', inplace=True)
+                print(f"After removing duplicates: {len(combined_df)} records (removed {old_len - len(combined_df)})")
+                
+                # Write data to the existing template
+                combined_df.to_excel(output_file, sheet_name="Email Data", index=False)
+                return f"Appended {len(new_data)} new emails to {output_file} (total: {len(combined_df)})"
+            except Exception as e:
+                print(f"Error reading existing Excel: {e}")
+                print("Creating new file instead")
+                # Create template first, then add data
+                create_excel_template(output_file)
+                new_data.to_excel(output_file, sheet_name="Email Data", index=False)
+                return f"Created new file {output_file} with {len(new_data)} emails"
+        else:
+            print(f"Creating new Excel file at {output_file}")
+            # Create template first, then add data
+            create_excel_template(output_file)
+            new_data.to_excel(output_file, sheet_name="Email Data", index=False)
+            return f"Created new file {output_file} with {len(new_data)} emails"
     except Exception as e:
-        return f"Error appending to Excel: {e}"
+        print(f"Critical error in append_to_excel: {str(e)}")
+        emergency_file = os.path.join(get_base_dir(), "emergency_email_data.xlsx")
+        try:
+            new_data.to_excel(emergency_file, index=False)
+            return f"Error with original file. Data saved to {emergency_file}"
+        except:
+            return f"Critical error: Could not save email data anywhere. {str(e)}"
+    
+def create_excel_template(excel_file):
+    """Create an Excel template for email data with proper formatting but no macros"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+        from openpyxl.styles import Font, Alignment, PatternFill
+        
+        # Ensure the file is xlsx
+        if excel_file.lower().endswith('.xlsm'):
+            excel_file = excel_file.replace('.xlsm', '.xlsx')
+            
+        # Create a new workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Email Data"
+        
+        # Define headers
+        headers = ["Subject", "Sender", "To", "CC", "BCC", "Date", "Content", "Attachments", 
+                  "Folder Path", "Tanggal Pengiriman", "Full Folder Path", "Folder Checklist", "SO Checklist"]
+        
+        # Add headers with formatting
+        header_font = Font(bold=True)
+        header_fill = PatternFill(start_color="E0E0E0", end_color="E0E0E0", fill_type="solid")
+        
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Set column widths
+        column_widths = {
+            1: 40,  # Subject
+            2: 25,  # Sender
+            3: 25,  # To
+            4: 25,  # CC
+            5: 20,  # BCC
+            6: 20,  # Date
+            7: 50,  # Content
+            8: 30,  # Attachments
+            9: 25,  # Folder Path
+            10: 20, # Tanggal Pengiriman
+            11: 30, # Full Folder Path
+            12: 15, # Folder Checklist
+            13: 15  # SO Checklist
+        }
+        
+        for col, width in column_widths.items():
+            ws.column_dimensions[get_column_letter(col)].width = width
+        
+        # Save the template as xlsx
+        wb.save(excel_file)
+        
+        print(f"Created template at {excel_file}")
+        return True
+    except Exception as e:
+        print(f"Error creating template: {e}")
+        return False
 
 def clean_subject(subject):
     if subject: 
@@ -201,7 +302,7 @@ def search_emails(
         subject_keyword=None,
         start_date=None, 
         end_date=None,
-        unread_only=False,
+        unread_only=True,
         status_callback=None
 ):
     search_criteria = []
@@ -242,6 +343,9 @@ def search_emails(
                 email_subject = clean_subject(email_message['Subject'])
                 email_sender = email_message['From']
                 email_date = email_message['Date']
+                email_to = email_message.get('To','')
+                email_cc = email_message.get('CC', '')
+                email_bcc = email_message.get('Bcc', '')
                 email_content = extract_email_content(email_message)
                 
                 attachment_paths = []
@@ -271,9 +375,17 @@ def search_emails(
                 email_list.append({
                     'Subject': email_subject,
                     'Sender': email_sender,
+                    'To': email_to,
+                    'CC': email_cc,
+                    'BCC': email_bcc,
                     'Date': email_date, 
+                    'Attachments': '; '.join(attachment_paths) if attachment_paths else '',
+                    'Folder Path': '',
+                    'Tanggal Pengiriman': '',
+                    'Full Folder Path': '', 
+                    'Folder Checklist': False,
+                    'SO Checklist': False,
                     'Content': email_content,
-                    'Attachments': '; '.join(attachment_paths) if attachment_paths else ''
                 })
             except Exception as email_error:
                 if status_callback:
@@ -287,7 +399,6 @@ def search_emails(
         if status_callback:
             status_callback(f"Email search error: {search_error}")
         return []
-    
 
 class EmailProcessorApp:
     def __init__(self, root):
@@ -296,7 +407,6 @@ class EmailProcessorApp:
         self.root.geometry("700x600")
         self.config, self.config_path = load_config()
         
-        # Create tabs
         self.tab_control = ttk.Notebook(root)
         self.setup_tab = ttk.Frame(self.tab_control)
         self.process_tab = ttk.Frame(self.tab_control)
@@ -305,23 +415,171 @@ class EmailProcessorApp:
         self.tab_control.add(self.setup_tab, text='Setup')
         self.tab_control.add(self.process_tab, text='Process Emails')
         self.tab_control.add(self.log_tab, text='Log')
-        
         self.tab_control.pack(expand=1, fill="both")
         
-        # Setup tab
         self.create_setup_tab()
         
-        # Process tab
         self.create_process_tab()
         
-        # Log tab
         self.create_log_tab()
         
-        # Load config values
         self.load_config_values()
 
+    def create_folders_from_excel(self):
+        try:
+            excel_file = self.excel_var.get()
+            if not excel_file:
+                self.update_status("Please specify Excel file path first")
+                return
+        
+            if excel_file.lower().endswith('.xlsm'):
+                excel_file = excel_file.replace('.xlsm', '.xlsx')
+                self.excel_var.set(excel_file)
+                
+            import pandas as pd
+            from openpyxl import load_workbook
+            import shutil
+            
+            df = pd.read_excel(excel_file)
+            
+            required_cols = ["Folder Path", "Tanggal Pengiriman", "Full Folder Path", "Folder Checklist", "Attachments"]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                self.update_status(f"Missing columns in Excel: {', '.join(missing_cols)}")
+                return
+            
+            # Get base path from settings
+            base_path = self.base_path_var.get().strip()
+            self.update_status(f"Using base path: '{base_path}'")
+            if not base_path:
+                self.update_status("Warning: Base Path for PO Folders is empty")
+            
+            folder_counter = 0
+            attachment_counter = 0
+            updated_rows = []
+            
+            for index, row in df.iterrows():
+                attachments = row.get('Attachments', '')
+                folder_checklist = row.get('Folder Checklist', False)
+                
+                # Skip rows without attachments or already processed
+                if pd.isna(attachments) or not str(attachments).strip() or folder_checklist:
+                    continue
+                    
+                folder_path = row.get('Folder Path', '')
+                tanggal = row.get('Tanggal Pengiriman', '')
+                
+                # Convert values to strings, handling NaN/None values
+                folder_path_str = str(folder_path).strip() if not pd.isna(folder_path) else ""
+                tanggal_str = str(tanggal).strip() if not pd.isna(tanggal) else ""
+                
+                # Initialize path components list
+                path_components = []
+                
+                # Add base path if it exists
+                if base_path:
+                    path_components.append(base_path)
+                    
+                # Add folder path if available
+                if folder_path_str:
+                    path_components.append(folder_path_str)
+                    
+                # Add tanggal if available
+                if tanggal_str:
+                    path_components.append(tanggal_str)
+                    
+                # Skip if we don't have enough components to create a meaningful path
+                if len(path_components) < 2:  # Need at least basepath + one other component
+                    self.update_status(f"Skipping row {index+2}: Insufficient path components")
+                    continue
+                    
+                # Create full path
+                full_path = os.path.join(*path_components)
+                
+                try:
+                    # Create the directory
+                    os.makedirs(full_path, exist_ok=True)
+                    folder_counter += 1
+                    self.update_status(f"Created folder: {full_path}")
+                    
+                    # Process attachments
+                    moved_attachments = []
+                    attachment_list = str(attachments).split('; ')
+                    
+                    for attachment_path in attachment_list:
+                        attachment_path = attachment_path.strip()
+                        if not attachment_path:
+                            continue
+                            
+                        if os.path.exists(attachment_path):
+                            try:
+                                filename = os.path.basename(attachment_path)
+                                dest_path = os.path.join(full_path, filename)
+                                
+                                # Move the file
+                                shutil.move(attachment_path, dest_path)
+                                
+                                moved_attachments.append(dest_path)
+                                attachment_counter += 1
+                                self.update_status(f"  - Moved attachment: {filename} to {full_path}")
+                            except Exception as e:
+                                self.update_status(f"  - Error moving attachment {filename}: {e}")
+                        else:
+                            self.update_status(f"  - Attachment not found: {attachment_path}")
+                    
+                    # Add to update list if we moved any attachments
+                    if moved_attachments:
+                        updated_rows.append({
+                            'index': index,
+                            'full_path': full_path,
+                            'moved_attachments': '; '.join(moved_attachments)
+                        })
+                    
+                except Exception as e:
+                    self.update_status(f"Error creating folder {full_path}: {e}")
+            
+            # Update Excel file with new information
+            if updated_rows:
+                wb = load_workbook(excel_file)
+                ws = wb.active
+            
+                for row_data in updated_rows:
+                    row_idx = row_data['index']
+                    full_path = row_data['full_path']
+                    moved_attachments = row_data['moved_attachments']
+            
+                    excel_row = row_idx + 2  # Adjusting for 1-based Excel rows and header
+            
+                    # Update Full Folder Path column (10)
+                    ws.cell(row=excel_row, column=10).value = full_path
+            
+                    # Update Folder Checklist column (11) to mark as processed
+                    ws.cell(row=excel_row, column=11).value = True
+            
+                    # Update Attachments column (7) with new paths
+                    if moved_attachments:
+                        ws.cell(row=excel_row, column=7).value = moved_attachments
+                    
+                wb.save(excel_file)
+                
+            self.update_status(f"Created {folder_counter} folders and moved {attachment_counter} attachments successfully")
+        except Exception as e:
+            self.update_status(f"Error processing folders: {e}")
+
+    def update_server_settings(self, event=None):
+        provider = self.email_provider_var.get()
+
+        if provider == "Gmail":
+            self.server_address_var.set('imap.gmail.com')
+            self.server_port_var.set('993')
+        elif provider =='Outlook/office365':
+            self.server_address_var.set('outlook.office365.com')
+            self.server_port_var.set('993')
+        elif provider == 'Yahoo':
+            self.server_address_var.set('imap.mail.yahoo.com')
+            self.server_port_var.set('993')
+
     def create_setup_tab(self):
-        # Email credentials frame
         cred_frame = ttk.LabelFrame(self.setup_tab, text="Email Credentials")
         cred_frame.pack(fill="x", padx=10, pady=10)
         
@@ -333,18 +591,35 @@ class EmailProcessorApp:
         self.password_var = tk.StringVar()
         ttk.Entry(cred_frame, textvariable=self.password_var, show="*", width=40).grid(column=1, row=1, padx=5, pady=5)
         
-        # Search criteria frame
+        server_frame = ttk.LabelFrame(self.setup_tab, text="Mail Server Settings")
+        server_frame.pack(fill="x", padx=10, pady=10)
+
+        ttk.Label(server_frame, text="Email Provider:").grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
+        self.email_provider_var = tk.StringVar()
+        provider_combo = ttk.Combobox(server_frame, textvariable=self.email_provider_var, width=20)
+        provider_combo['values'] = ('Gmail', 'Outlook/Office365', 'Yahoo', 'Custom')
+        provider_combo.grid(column=1, row=0, padx=5, pady=5)
+        provider_combo.bind('<<ComboboxSelected>>', self.update_server_settings)
+
+        ttk.Label(server_frame, text="IMAP Server:").grid(column=0, row=1, sticky=tk.W, padx=5, pady=5)
+        self.server_address_var = tk.StringVar()
+        ttk.Entry(server_frame, textvariable=self.server_address_var, width=40).grid(column=1, row=1, padx=5, pady=5)
+        
+        ttk.Label(server_frame, text="IMAP Port:").grid(column=0, row=2, sticky=tk.W, padx=5, pady=5)
+        self.server_port_var = tk.StringVar(value="993")  # Default IMAP SSL port
+        ttk.Entry(server_frame, textvariable=self.server_port_var, width=10).grid(column=1, row=2, sticky=tk.W, padx=5, pady=5)
+
+
         search_frame = ttk.LabelFrame(self.setup_tab, text="Search Criteria")
         search_frame.pack(fill="x", padx=10, pady=10)
         
-        ttk.Label(search_frame, text="Subject Keyword:").grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(search_frame, text="Subject Keyword (optional):").grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
         self.subject_var = tk.StringVar()
         ttk.Entry(search_frame, textvariable=self.subject_var, width=40).grid(column=1, row=0, padx=5, pady=5)
         
-        self.unread_var = tk.BooleanVar()
+        self.unread_var = tk.BooleanVar(value=True)  # Default to True
         ttk.Checkbutton(search_frame, text="Unread Only", variable=self.unread_var).grid(column=0, row=1, columnspan=2, sticky=tk.W, padx=5, pady=5)
         
-        # Output settings frame
         output_frame = ttk.LabelFrame(self.setup_tab, text="Output Settings")
         output_frame.pack(fill="x", padx=10, pady=10)
         
@@ -356,11 +631,17 @@ class EmailProcessorApp:
         self.dir_var = tk.StringVar()
         ttk.Entry(output_frame, textvariable=self.dir_var, width=40).grid(column=1, row=1, padx=5, pady=5)
         
-        # Save button
+        ttk.Label(output_frame, text="Base Path for PO Folders:").grid(column=0, row=2, sticky=tk.W, padx=5, pady=5)
+        self.base_path_var = tk.StringVar()
+        ttk.Entry(output_frame, textvariable=self.base_path_var, width=40).grid(column=1, row=2, padx=5, pady=5)
+        
         ttk.Button(self.setup_tab, text="Save Configuration", command=self.save_config_values).pack(pady=10)
 
+        folder_button = ttk.Button(output_frame, text="Create Folders from Excel Data", 
+                                command=self.create_folders_from_excel)
+        folder_button.grid(column=0, row=4, columnspan=2, padx=5, pady=10)
+
     def create_process_tab(self):
-        # Date range frame
         date_frame = ttk.LabelFrame(self.process_tab, text="Date Range")
         date_frame.pack(fill="x", padx=10, pady=10)
         
@@ -371,18 +652,15 @@ class EmailProcessorApp:
         ttk.Label(date_frame, text="End Date (YYYY-MM-DD):").grid(column=2, row=0, sticky=tk.W, padx=5, pady=5)
         self.end_date_var = tk.StringVar()
         ttk.Entry(date_frame, textvariable=self.end_date_var, width=15).grid(column=3, row=0, padx=5, pady=5)
-        
-        # Today button
+
         def set_today():
             today = datetime.datetime.now().strftime("%Y-%m-%d")
             self.end_date_var.set(today)
         
         ttk.Button(date_frame, text="Set Today", command=set_today).grid(column=4, row=0, padx=5, pady=5)
-        
-        # Process button
+
         ttk.Button(self.process_tab, text="Process Emails", command=self.process_emails).pack(pady=10)
-        
-        # Progress frame
+
         progress_frame = ttk.LabelFrame(self.process_tab, text="Progress")
         progress_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
@@ -412,6 +690,11 @@ class EmailProcessorApp:
             self.email_var.set(self.config['Credentials'].get('email', ''))
             self.password_var.set(self.config['Credentials'].get('password', ''))
         
+        if 'Server' in self.config:
+            self.email_provider_var.set(self.config['Server'].get('provider', 'Gmail'))
+            self.server_address_var.set(self.config['Server'].get('address', 'imap.gmail.com'))
+            self.server_port_var.set(self.config['Server'].get('port', '993'))
+
         if 'Search' in self.config:
             self.subject_var.set(self.config['Search'].get('subject_keyword', ''))
             self.unread_var.set(self.config['Search'].getboolean('unread_only', True))
@@ -419,12 +702,19 @@ class EmailProcessorApp:
         if 'Output' in self.config:
             self.excel_var.set(self.config['Output'].get('excel_file', 'email_attachment_report.xlsx'))
             self.dir_var.set(self.config['Output'].get('attachments_dir', ''))
+            self.base_path_var.set(self.config['Output'].get('base_path', ''))
     
     def save_config_values(self):
         if 'Credentials' not in self.config:
             self.config['Credentials'] = {}
         self.config['Credentials']['email'] = self.email_var.get()
         self.config['Credentials']['password'] = self.password_var.get()
+
+        if 'Server' not in self.config:
+            self.config['Server'] = {}
+        self.config['Server']['provider'] = self.email_provider_var.get()
+        self.config['Server']['address'] = self.server_address_var.get()
+        self.config['Server']['port'] = self.server_port_var.get()
         
         if 'Search' not in self.config:
             self.config['Search'] = {}
@@ -435,6 +725,7 @@ class EmailProcessorApp:
             self.config['Output'] = {}
         self.config['Output']['excel_file'] = self.excel_var.get()
         self.config['Output']['attachments_dir'] = self.dir_var.get()
+        self.config['Output']['base_path'] = self.base_path_var.get()
         
         save_config(self.config, self.config_path)
         messagebox.showinfo("Configuration", "Configuration saved successfully!")
@@ -450,7 +741,6 @@ class EmailProcessorApp:
 
     def process_emails(self):
         try:
-            # Parse dates
             start_date = None
             end_date = None
             
@@ -464,32 +754,35 @@ class EmailProcessorApp:
             if self.end_date_var.get().strip():
                 try:
                     end_date = datetime.datetime.strptime(self.end_date_var.get().strip(), "%Y-%m-%d")
-                    # Add one day to include emails from the end date
                     end_date += datetime.timedelta(days=1)
                 except ValueError:
                     messagebox.showerror("Date Error", "Invalid end date format. Use YYYY-MM-DD")
                     return
             
-            # Validate required fields
             if not self.email_var.get() or not self.password_var.get():
                 messagebox.showerror("Input Error", "Email and password are required")
                 return
             
-            # Create attachments directory if needed
+            email_provider = self.email_provider_var.get()
+            server_address = self.server_address_var.get()
+            server_port = self.server_port_var.get()
+
+            if not server_address:
+                server_address = 'imap.gmail.com'
+                server_port = 993
+
             attachments_dir = self.dir_var.get()
             if not attachments_dir:
                 attachments_dir = create_attachments_dir(get_base_dir())
             else:
                 os.makedirs(attachments_dir, exist_ok=True)
             
-            self.update_status("Connecting to email server...")
+            self.update_status("Connecting to email server : {server_address}")
             
-            # Process in a separate thread to avoid freezing UI
-            self.tab_control.select(self.log_tab)  # Switch to log tab
+            self.tab_control.select(self.log_tab)
             
-            # Connect to email
             try:
-                with imaplib.IMAP4_SSL('imap.gmail.com') as mail:
+                with imaplib.IMAP4_SSL(server_address, int(server_port)) as mail:
                     self.update_status("Logging in...")
                     mail.login(self.email_var.get(), self.password_var.get())
                     self.update_status("Connected successfully")
@@ -533,58 +826,10 @@ class EmailProcessorApp:
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred: {e}")
 
-def run_cli():
-    config, __ = load_config()
-    print("Email Attachment Processor - CLI Mode")
-    print("-------------------------------------")
-    email = config['Credentials'].get('email', '')
-    password = config['Credentials'].get('password', '')
-
-    if not email or not password: 
-        print('Email credentials not found in config. Please run the GUI version first to set up.')
-        return
-    attachments_dir = config['Output'].get('attachments_dir', '')
-    if not attachments_dir:
-        attachments_dir = create_attachments_dir(get_base_dir())
-    
-    try:
-        print("Connecting to email server...")
-        with imaplib.IMAP4_SSL('imap.gmail.com') as mail:
-            print("Logging in...")
-            mail.login(email, password)
-            print("Connected successfully")
-            mail.select('inbox')
-            print("Searching for emails...")
-
-            emails = search_emails(
-                mail,
-                attachments_dir,
-                subject_keyword= config['Search'].get('subject_keyword', ''),
-                unread_only=config['Search'].getboolean('unread_only', True),
-                status_callback=print
-            )
-
-            if emails: 
-                df = pd.DataFrame(emails)
-                output_file = config['Output'].get('excel_file', 'email_attachment_report.xlsx')
-                if not os.path.isabs(output_file):
-                    output_file = os.path.join(get_base_dir(), output_file)
-                result = append_to_excel(df, output_file)
-                print(result)
-            else:
-                print('No emails were found or processed')
-    except imaplib.IMAP4.error as login_error:
-        print(f"IMAP Login Error:{login_error}")
-    except Exception as e: 
-        print(f"Unexpected error: {e}")
-
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == '--cli':
-        run_cli()
-    else:
-        root = tk.Tk()
-        app = EmailProcessorApp(root)
-        root.mainloop()
+    root = tk.Tk()
+    app = EmailProcessorApp(root)
+    root.mainloop()
 
 if __name__ == '__main__':
     main()
